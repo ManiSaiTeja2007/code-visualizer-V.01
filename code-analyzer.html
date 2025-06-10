@@ -1,0 +1,676 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Advanced Code Visualizer</title>
+    <script src="https://cdn.jsdelivr.net/npm/react@18.2.0/umd/react.development.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/react-dom@18.2.0/umd/react-dom.development.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@babel/standalone@7.20.6/babel.min.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/react-flow-renderer@10.3.17/dist/umd/react-flow-renderer.min.js"></script>
+    <link
+      href="https://cdn.jsdelivr.net/npm/react-flow-renderer@10.3.17/dist/style.css"
+      rel="stylesheet"
+    />
+    <script src="https://cdn.jsdelivr.net/npm/esprima@4.0.1/dist/esprima.min.js"></script>
+    <script src="https://cdn.pyodide.io/v0.23.4/full/pyodide.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/redux@4.2.1/dist/redux.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/react-redux@8.0.5/dist/react-redux.min.js"></script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="text/babel" data-presets="react,typescript">
+      const { useState, useEffect } = React;
+      const { Provider, useSelector, useDispatch } = ReactRedux;
+      const ReactFlow = window.ReactFlow.default;
+
+      // Redux setup
+      const initialState = {
+        structures: [],
+        variableTable: [],
+        nodes: [],
+        edges: [],
+      };
+
+      const reducer = (state = initialState, action) => {
+        switch (action.type) {
+          case "SET_ANALYSIS":
+            return {
+              ...state,
+              structures: action.payload.structures,
+              variableTable: action.payload.variableTable,
+              nodes: action.payload.nodes,
+              edges: action.payload.edges,
+            };
+          default:
+            return state;
+        }
+      };
+
+      const store = Redux.createStore(reducer);
+
+      interface VariableState {
+        variable: string;
+        iteration: number;
+        value: string;
+      }
+
+      interface Node {
+        id: string;
+        type: string;
+        data: { label: string };
+        position: { x: number, y: number };
+      }
+
+      interface Edge {
+        id: string;
+        source: string;
+        target: string;
+        type?: string;
+        animated?: boolean;
+      }
+
+      // Parser for JavaScript (src/parsers/javascript/parser.ts)
+      const parseJavaScript = (code: string) => {
+        try {
+          const ast = window.esprima.parseScript(code, { tolerant: true });
+          const structures: string[] = [];
+          const variableChanges: VariableState[] = [];
+          const nodes: Node[] = [];
+          const edges: Edge[] = [];
+          let iteration = 0;
+
+          const traverse = (node: any, parentIteration: number) => {
+            if (node.type === "ArrayExpression") {
+              structures.push("Array");
+              const elements = node.elements.map(
+                (el: any) => el.value || "empty"
+              );
+              nodes.push(
+                ...elements.map((el: string, idx: number) => ({
+                  id: `array-${idx}`,
+                  type: "default",
+                  data: { label: el },
+                  position: { x: idx * 100, y: 50 },
+                }))
+              );
+            }
+            if (node.type === "ObjectExpression") {
+              structures.push("Tree/Graph");
+              nodes.push(
+                {
+                  id: "root",
+                  type: "default",
+                  data: { label: "Root" },
+                  position: { x: 250, y: 50 },
+                },
+                {
+                  id: "child1",
+                  type: "default",
+                  data: { label: "Child 1" },
+                  position: { x: 200, y: 150 },
+                },
+                {
+                  id: "child2",
+                  type: "default",
+                  data: { label: "Child 2" },
+                  position: { x: 300, y: 150 },
+                }
+              );
+              edges.push(
+                { id: "e1", source: "root", target: "child1", animated: true },
+                { id: "e2", source: "root", target: "child2", animated: true }
+              );
+            }
+            if (
+              node.type === "ClassDeclaration" &&
+              node.id.name.includes("Node")
+            ) {
+              const listType =
+                code.includes("next") && code.includes("prev")
+                  ? "Doubly Linked List"
+                  : code.includes("left") || code.includes("right")
+                  ? "Binary Tree"
+                  : "Singly Linked List";
+              structures.push(listType);
+              nodes.push(
+                {
+                  id: "node1",
+                  type: "default",
+                  data: { label: "Node 1" },
+                  position: { x: 50, y: 50 },
+                },
+                {
+                  id: "node2",
+                  type: "default",
+                  data: { label: "Node 2" },
+                  position: { x: 150, y: 50 },
+                }
+              );
+              edges.push({
+                id: "e1",
+                source: "node1",
+                target: "node2",
+                type: "smoothstep",
+                animated: true,
+              });
+              if (listType === "Doubly Linked List") {
+                edges.push({
+                  id: "e2",
+                  source: "node2",
+                  target: "node1",
+                  type: "smoothstep",
+                  animated: true,
+                });
+              }
+            }
+            if (
+              node.type === "ForStatement" ||
+              node.type === "WhileStatement"
+            ) {
+              iteration++;
+              if (node.init && node.init.declarations) {
+                node.init.declarations.forEach((decl: any) => {
+                  variableChanges.push({
+                    variable: decl.id.name,
+                    iteration,
+                    value: "Initialized",
+                  });
+                });
+              }
+            }
+            if (node.type === "AssignmentExpression") {
+              variableChanges.push({
+                variable: node.left.name,
+                iteration,
+                value: JSON.stringify(node.right.value || "complex"),
+              });
+            }
+            for (const key in node) {
+              if (node[key] && typeof node[key] === "object") {
+                traverse(node[key], iteration);
+              }
+            }
+          };
+
+          traverse(ast, 0);
+          return { structures, variableChanges, nodes, edges };
+        } catch (e) {
+          console.error("JS Parse Error:", e);
+          return { structures: [], variableChanges: [], nodes: [], edges: [] };
+        }
+      };
+
+      // Python parser (src/parsers/python/parser.ts)
+      const parsePython = async (pyodide: any, code: string) => {
+        if (!pyodide)
+          return { structures: [], variableChanges: [], nodes: [], edges: [] };
+        try {
+          const pythonCode = `
+          import ast
+          def parse_code(code):
+              tree = ast.parse(code)
+              structures = []
+              variable_changes = []
+              nodes = []
+              edges = []
+              iteration = 0
+
+              for node in ast.walk(tree):
+                  if isinstance(node, ast.List):
+                      structures.append('List')
+                      elements = [n.s if isinstance(n, ast.Str) else n.n if hasattr(n, 'n') else 'empty' for n in node.elts]
+                      nodes.extend([{'id': f'list-{i}', 'type': 'default', 'data': {'label': el}, 'position': {'x': i * 100, 'y': 50}} for i, el in enumerate(elements)])
+                  if isinstance(node, ast.Dict):
+                      structures.append('Dictionary (Tree/Graph)')
+                      nodes.extend([
+                          {'id': 'root', 'type': 'default', 'data': {'label': 'Root'}, 'position': {'x': 250, 'y': 50}},
+                          {'id': 'child1', 'type': 'default', 'data': {'label': 'Child 1'}, 'position': {'x': 200, 'y': 150}},
+                          {'id': 'child2', 'type': 'default', 'data': {'label': 'Child 2'}, 'position': {'x': 300, 'y': 150}},
+                      ])
+                      edges.extend([
+                          {'id': 'e1', 'source': 'root', 'target': 'child1', 'animated': True},
+                          {'id': 'e2', 'source': 'root', 'target': 'child2', 'animated': True},
+                      ])
+                  if isinstance(node, ast.ClassDef) and 'Node' in node.name:
+                      list_type = 'Doubly Linked List' if 'prev' in code else 'Binary Tree' if 'left' in code or 'right' in code else 'Singly Linked List'
+                      structures.append(list_type)
+                      nodes.extend([
+                          {'id': 'node1', 'type': 'default', 'data': {'label': 'Node 1'}, 'position': {'x': 50, 'y': 50}},
+                          {'id': 'node2', 'type': 'default', 'data': {'label': 'Node 2'}, 'position': {'x': 150, 'y': 50}},
+                      ])
+                      edges.append({'id': 'e1', 'source': 'node1', 'target': 'node2', 'type': 'smoothstep', 'animated': True})
+                      if list_type == 'Doubly Linked List':
+                          edges.append({'id': 'e2', 'source': 'node2', 'target': 'node1', 'type': 'smoothstep', 'animated': True})
+                  if isinstance(node, (ast.For, ast.While)):
+                      iteration += 1
+                      if hasattr(node, 'target'):
+                          variable_changes.append({
+                              'variable': node.target.id if isinstance(node.target, ast.Name) else 'unknown',
+                              'iteration': iteration,
+                              'value': 'Initialized'
+                          })
+                  if isinstance(node, ast.Assign):
+                      for target in node.targets:
+                          if isinstance(target, ast.Name):
+                              variable_changes.append({
+                                  'variable': target.id,
+                                  'iteration': iteration,
+                                  'value': str(node.value.value) if hasattr(node.value, 'value') else 'complex'
+                              })
+
+              return {'structures': structures, 'variable_changes': variable_changes, 'nodes': nodes, 'edges': edges}
+          `;
+          await pyodide.runPythonAsync(pythonCode);
+          const result = await pyodide.runPythonAsync(
+            `parse_code(${JSON.stringify(code)})`
+          );
+          const { structures, variable_changes, nodes, edges } = result.toJs({
+            dict_converter: Object.fromEntries,
+          });
+          return {
+            structures,
+            variableChanges: variable_changes,
+            nodes,
+            edges,
+          };
+        } catch (e) {
+          console.error("Python Parse Error:", e);
+          return { structures: [], variableChanges: [], nodes: [], edges: [] };
+        }
+      };
+
+      // C/C++ parser (src/parsers/cpp/parser.ts)
+      const parseCpp = (code: string) => {
+        const structures: string[] = [];
+        const variableChanges: VariableState[] = [];
+        const nodes: Node[] = [];
+        const edges: Edge[] = [];
+        let iteration = 0;
+
+        const lines = code.split("\n");
+        lines.forEach((line, idx) => {
+          if (line.match(/int\[\]|float\[\]|std::vector</)) {
+            structures.push("Array/Vector");
+            const arrayMatch = line.match(/\{.*?\}/);
+            if (arrayMatch) {
+              const elements = arrayMatch[0]
+                .slice(1, -1)
+                .split(",")
+                .map((item) => item.trim());
+              nodes.push(
+                ...elements.map((el: string, idx: number) => ({
+                  id: `array-${idx}`,
+                  type: "default",
+                  data: { label: el || "empty" },
+                  position: { x: idx * 100, y: 50 },
+                }))
+              );
+            }
+          }
+          if (line.match(/struct.*Node|class.*Node/)) {
+            const listType = line.includes("prev")
+              ? "Doubly Linked List"
+              : line.includes("left") || line.includes("right")
+              ? "Binary Tree"
+              : "Singly Linked List";
+            structures.push(listType);
+            nodes.push(
+              {
+                id: "node1",
+                type: "default",
+                data: { label: "Node 1" },
+                position: { x: 50, y: 50 },
+              },
+              {
+                id: "node2",
+                type: "default",
+                data: { label: "Node 2" },
+                position: { x: 150, y: 50 },
+              }
+            );
+            edges.push({
+              id: "e1",
+              source: "node1",
+              target: "node2",
+              type: "smoothstep",
+              animated: true,
+            });
+            if (listType === "Doubly Linked List") {
+              edges.push({
+                id: "e2",
+                source: "node2",
+                target: "node1",
+                type: "smoothstep",
+                animated: true,
+              });
+            }
+          }
+          if (line.match(/std::stack</)) {
+            structures.push("Stack");
+            nodes.push(
+              {
+                id: "stack1",
+                type: "default",
+                data: { label: "Top" },
+                position: { x: 50, y: 50 },
+              },
+              {
+                id: "stack2",
+                type: "default",
+                data: { label: "Base" },
+                position: { x: 50, y: 150 },
+              }
+            );
+            edges.push({
+              id: "e1",
+              source: "stack1",
+              target: "stack2",
+              type: "smoothstep",
+              animated: true,
+            });
+          }
+          if (line.match(/std::queue</)) {
+            structures.push("Queue");
+            nodes.push(
+              {
+                id: "queue1",
+                type: "default",
+                data: { label: "Front" },
+                position: { x: 50, y: 50 },
+              },
+              {
+                id: "queue2",
+                type: "default",
+                data: { label: "Rear" },
+                position: { x: 150, y: 50 },
+              }
+            );
+            edges.push({
+              id: "e1",
+              source: "queue1",
+              target: "queue2",
+              type: "smoothstep",
+              animated: true,
+            });
+          }
+          if (
+            line.match(/for\s*\(.*;.*;.*\)/) ||
+            line.match(/while\s*\(.*\)/)
+          ) {
+            iteration++;
+            const varMatch = line.match(/(int|float|double)\s+(\w+)\s*=/);
+            if (varMatch) {
+              variableChanges.push({
+                variable: varMatch[2],
+                iteration,
+                value: "Initialized",
+              });
+            }
+          }
+          const assignMatch = line.match(/(\w+)\s*=\s*([^;]+)/);
+          if (assignMatch) {
+            variableChanges.push({
+              variable: assignMatch[1],
+              iteration,
+              value: assignMatch[2].trim(),
+            });
+          }
+        });
+
+        return { structures, variableChanges, nodes, edges };
+      };
+
+      // Java parser (src/parsers/java/parser.ts)
+      const parseJava = (code: string) => {
+        const structures: string[] = [];
+        const variableChanges: VariableState[] = [];
+        const nodes: Node[] = [];
+        const edges: Edge[] = [];
+        let iteration = 0;
+
+        const lines = code.split("\n");
+        lines.forEach((line, idx) => {
+          if (line.match(/int\[\]|String\[\]|List</)) {
+            structures.push("Array/List");
+            const arrayMatch = line.match(/\{.*?\}/);
+            if (arrayMatch) {
+              const elements = arrayMatch[0]
+                .slice(1, -1)
+                .split(",")
+                .map((item) => item.trim());
+              nodes.push(
+                ...elements.map((el: string, idx: number) => ({
+                  id: `array-${idx}`,
+                  type: "default",
+                  data: { label: el || "empty" },
+                  position: { x: idx * 100, y: 50 },
+                }))
+              );
+            }
+          }
+          if (line.match(/class.*Node/)) {
+            const listType = line.includes("prev")
+              ? "Doubly Linked List"
+              : line.includes("left") || line.includes("right")
+              ? "Binary Tree"
+              : "Singly Linked List";
+            structures.push(listType);
+            nodes.push(
+              {
+                id: "node1",
+                type: "default",
+                data: { label: "Node 1" },
+                position: { x: 50, y: 50 },
+              },
+              {
+                id: "node2",
+                type: "default",
+                data: { label: "Node 2" },
+                position: { x: 150, y: 50 },
+              }
+            );
+            edges.push({
+              id: "e1",
+              source: "node1",
+              target: "node2",
+              type: "smoothstep",
+              animated: true,
+            });
+            if (listType === "Doubly Linked List") {
+              edges.push({
+                id: "e2",
+                source: "node2",
+                target: "node1",
+                type: "smoothstep",
+                animated: true,
+              });
+            }
+          }
+          if (
+            line.match(/for\s*\(.*;.*;.*\)/) ||
+            line.match(/while\s*\(.*\)/)
+          ) {
+            iteration++;
+            const varMatch = line.match(
+              /(int|float|double|String)\s+(\w+)\s*=/
+            );
+            if (varMatch) {
+              variableChanges.push({
+                variable: varMatch[2],
+                iteration,
+                value: "Initialized",
+              });
+            }
+          }
+          const assignMatch = line.match(/(\w+)\s*=\s*([^;]+)/);
+          if (assignMatch) {
+            variableChanges.push({
+              variable: assignMatch[1],
+              iteration,
+              value: assignMatch[2].trim(),
+            });
+          }
+        });
+
+        return { structures, variableChanges, nodes, edges };
+      };
+
+      // Main component (src/components/CodeAnalyzer.tsx)
+      const CodeAnalyzer: React.FC = () => {
+        const [code, setCode] = useState < string > "";
+        const [language, setLanguage] = useState < string > "javascript";
+        const [pyodide, setPyodide] = useState < any > null;
+        const dispatch = useDispatch();
+        const { structures, variableTable, nodes, edges } = useSelector(
+          (state: any) => state
+        );
+
+        useEffect(() => {
+          async function loadPyodide() {
+            const pyodideInstance = await window.loadPyodide();
+            await pyodideInstance.loadPackage("micropip");
+            setPyodide(pyodideInstance);
+          }
+          loadPyodide();
+        }, []);
+
+        const analyzeCode = async () => {
+          let result: {
+            structures: string[],
+            variableChanges: VariableState[],
+            nodes: Node[],
+            edges: Edge[],
+          };
+          switch (language) {
+            case "javascript":
+              result = parseJavaScript(code);
+              break;
+            case "python":
+              result = await parsePython(pyodide, code);
+              break;
+            case "cpp":
+              result = parseCpp(code);
+              break;
+            case "java":
+              result = parseJava(code);
+              break;
+            default:
+              result = {
+                structures: [],
+                variableChanges: [],
+                nodes: [],
+                edges: [],
+              };
+          }
+          dispatch({
+            type: "SET_ANALYSIS",
+            payload: {
+              structures: result.structures,
+              variableTable: result.variableChanges,
+              nodes: result.nodes,
+              edges: result.edges,
+            },
+          });
+        };
+
+        return (
+          <div className="container mx-auto p-4">
+            <h1 className="text-2xl font-bold mb-4">
+              Advanced Code Visualizer
+            </h1>
+            <select
+              className="mb-4 p-2 border rounded"
+              value={language}
+              onChange={(e) => setLanguage(e.target.value)}
+            >
+              <option value="javascript">JavaScript</option>
+              <option value="python">Python</option>
+              <option value="java">Java</option>
+              <option value="cpp">C/C++</option>
+            </select>
+            <textarea
+              className="w-full h-40 p-2 border rounded mb-4"
+              value={code}
+              onChange={(e) => setCode(e.target.value)}
+              placeholder={`Enter your ${language} code here...`}
+            />
+            <button
+              className="bg-blue-500 text-white px-4 py-2 rounded hover:bg-blue-600"
+              onClick={analyzeCode}
+            >
+              Analyze Code
+            </button>
+
+            {structures.length > 0 && (
+              <div className="mt-4">
+                <h2 className="text-xl font-semibold">
+                  Detected Data Structures:
+                </h2>
+                <ul className="list-disc pl-5">
+                  {structures.map((structure: string, index: number) => (
+                    <li key={index}>{structure}</li>
+                  ))}
+                </ul>
+              </div>
+            )}
+
+            {nodes.length > 0 && (
+              <div className="mt-4">
+                <h2 className="text-xl font-semibold">
+                  Structure Visualization:
+                </h2>
+                <div style={{ height: "400px", border: "1px solid #ccc" }}>
+                  <ReactFlow
+                    nodes={nodes}
+                    edges={edges}
+                    fitView
+                    style={{ width: "100%", height: "100%" }}
+                    nodesDraggable={true}
+                    nodesConnectable={false}
+                  />
+                </div>
+              </div>
+            )}
+
+            {variableTable.length > 0 && (
+              <div className="mt-4">
+                <h2 className="text-xl font-semibold">Variable Value Flow:</h2>
+                <table className="table-auto w-full border-collapse border">
+                  <thead>
+                    <tr>
+                      <th className="border px-4 py-2">Variable</th>
+                      <th className="border px-4 py-2">Iteration/Call</th>
+                      <th className="border px-4 py-2">Value</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {variableTable.map((row: VariableState, index: number) => (
+                      <tr key={index}>
+                        <td className="border px-4 py-2">{row.variable}</td>
+                        <td className="border px-4 py-2">{row.iteration}</td>
+                        <td className="border px-4 py-2">{row.value}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        );
+      };
+
+      // App component (src/App.tsx)
+      const App: React.FC = () => (
+        <Provider store={store}>
+          <CodeAnalyzer />
+        </Provider>
+      );
+
+      // Render (src/index.tsx)
+      const root = ReactDOM.createRoot(document.getElementById("root"));
+      root.render(<App />);
+    </script>
+  </body>
+</html>
